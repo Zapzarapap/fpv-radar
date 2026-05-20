@@ -58,7 +58,7 @@
 html,body{height:100%;width:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--page-bg);color:var(--page-fg);overflow:hidden}
 body{position:fixed;touch-action:manipulation}
 #map{height:100%;width:100%;z-index:1;position:relative}
-#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--api-msg);font-size:14px;z-index:2000;background:var(--loading-bg);padding:14px 22px;border-radius:10px;border:1px solid var(--loading-border);text-align:center;line-height:1.5;max-width:300px}
+#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--api-msg);font-size:14px;z-index:2000;background:var(--loading-bg);padding:14px 22px;border-radius:10px;border:1px solid var(--loading-border);text-align:center;line-height:1.5;max-width:300px;cursor:pointer}
 #controls{position:absolute;top:calc(10px + env(safe-area-inset-top,0px));left:calc(10px + env(safe-area-inset-left,0px));z-index:1000;background:var(--ctrl-bg);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border:1px solid var(--ctrl-border);border-radius:12px;padding:8px 10px;width:210px;box-shadow:0 4px 24px rgba(0,0,0,0.5);max-width:calc(100vw - 20px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px))}
 #controls .label{font-size:8px;text-transform:uppercase;letter-spacing:1.2px;color:var(--label);margin-bottom:2px}
 .cg{margin-bottom:4px}
@@ -248,35 +248,62 @@ document.getElementById('search-input').addEventListener('keydown',function(e){
   x.onerror=function(){gs.textContent='Network error.';gs.className='fail'};x.send();
 });
 
+function retryGps(){
+  ipTried=false;
+  var ld=document.getElementById('loading');
+  if(ld){ld.textContent='Looking for GPS...';ld.className=''}
+  gs.textContent='GPS: searching...';gs.className='';
+  navigator.geolocation.getCurrentPosition(
+    function(p){
+      setP(p.coords.latitude,p.coords.longitude,'GPS active');
+      var ld2=document.getElementById('loading');
+      if(ld2)ld2.style.display='none';
+      if(!map)initMap();
+    },
+    function(e){
+      console.warn('[AG] GPS:',e.code,e.message);
+      gs.textContent='GPS denied — tap to retry';gs.className='fail';
+      gs.onclick=retryGps;
+      var ld2=document.getElementById('loading');
+      if(ld2&&ld2.style.display!=='none')ipFallback(ld2);
+    },
+    {enableHighAccuracy:true,timeout:30000,maximumAge:5000}
+  );
+}
+var ipTried=false;
+function ipFallback(ld){
+  if(ipTried)return;ipTried=true;
+  if(!ld)ld=document.getElementById('loading');
+  if(ld&&ld.style.display==='none')return;
+  gs.textContent='Getting IP location...';gs.className='';
+  gs.onclick=null;
+  var x=new XMLHttpRequest();
+  x.open('GET','https://ip-api.com/json/?fields=lat,lon,status,city,country',true);x.timeout=10000;
+  x.onload=function(){
+    try{var d=JSON.parse(x.responseText);
+      if(d.status==='success'){var loc=(d.city||'')+(d.city&&d.country?', ':'')+(d.country||'');setP(d.lat,d.lon,loc||'IP location');if(ld)ld.style.display='none';if(!map)initMap()}
+      else throw Error(d.status)}catch(e){fallback2(ld)}
+  };
+  x.onerror=function(){fallback2(ld)};x.ontimeout=function(){fallback2(ld)};x.send();
+}
+function fallback2(ld){
+  gs.textContent='Enter a location to begin';gs.className='fail';
+  gs.onclick=retryGps;
+  if(!ld)ld=document.getElementById('loading');
+  pilotLat=51.5074;pilotLng=-0.1278;
+  document.getElementById('lat-input').value='51.5074';document.getElementById('lng-input').value='-0.1278';
+  if(ld)ld.style.display='none';
+  if(!map)initMap();
+}
 function init(){
   applyTheme();
   var ld=document.getElementById('loading');
-  ld.textContent='Looking for GPS...';gs.textContent='GPS: searching...';gs.className='';
-  navigator.geolocation.getCurrentPosition(
-    function(p){setP(p.coords.latitude,p.coords.longitude,'GPS active');ld.style.display='none';initMap()},
-    function(e){
-      console.warn('[AG] GPS:',e.code,e.message);
-      gs.textContent='GPS unavailable, trying IP...';gs.className='fail';
-      var x=new XMLHttpRequest();
-      x.open('GET','https://ip-api.com/json/?fields=lat,lon,status,city,country',true);x.timeout=10000;
-      x.onload=function(){
-        try{var d=JSON.parse(x.responseText);
-          if(d.status==='success'){var loc=(d.city||'')+(d.city&&d.country?', ':'')+(d.country||'');setP(d.lat,d.lon,loc||'IP geolocation');ld.style.display='none';initMap()}
-          else throw Error(d.status)}catch(e){fallback(ld)}
-      };
-      x.onerror=function(){fallback(ld)};x.ontimeout=function(){fallback(ld)};x.send();
-    },
-    {enableHighAccuracy:false,timeout:8000,maximumAge:120000}
-  );
+  ld.textContent='Looking for GPS...';ld.onclick=retryGps;
+  gs.textContent='GPS: searching...';gs.className='';
+  retryGps();
 }
 
-function fallback(ld){
-  ld.textContent='Enter a location, then Start.';
-  gs.textContent='Use search or coord mode';gs.className='fail';
-  pilotLat=51.5074;pilotLng=-0.1278;
-  document.getElementById('lat-input').value='51.5074';document.getElementById('lng-input').value='-0.1278';
-  ld.style.display='none';initMap();
-}
+
 
 function setFromCoords(){
   if(locked){var h=document.getElementById('lock-hint');h.classList.add('show');setTimeout(function(){h.classList.remove('show')},2500);return}
