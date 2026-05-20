@@ -77,7 +77,7 @@ body{position:fixed;touch-action:manipulation}
 .coord-row button{background:var(--btn-bg);border:1px solid var(--btn-border);border-radius:5px;padding:4px 6px;color:var(--btn-fg);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;flex-shrink:0;height:26px;min-width:26px;line-height:1;display:inline-flex;align-items:center;justify-content:center}
 .coord-row button:active{transform:scale(0.96)}
 .coord-row .lock-on,.row .lock-on{color:var(--lock-fg);border-color:rgba(255,136,68,0.25);background:rgba(255,136,68,0.08)}
-#gps-status{font-size:7px;color:var(--api-msg);margin-top:2px;line-height:1.2}
+#gps-status{font-size:7px;color:var(--api-msg);margin-top:2px;line-height:1.2;cursor:pointer}
 #gps-status.ok{color:var(--gps-ok)}
 #gps-status.fail{color:var(--gps-fail)}
 .radius-wrap{display:flex;align-items:center;gap:4px}
@@ -204,7 +204,7 @@ function setP(lat,lng,src){
   pilotLat=lat;pilotLng=lng;
   document.getElementById('lat-input').value=lat.toFixed(5);
   document.getElementById('lng-input').value=lng.toFixed(5);
-  gs.textContent=src;gs.className='ok';
+  gs.textContent=src;gs.className='ok';gs.onclick=retryGps;
   if(map){map.setView([pilotLat,pilotLng],12);if(pilotMarker)pilotMarker.setLatLng([pilotLat,pilotLng]);updC();if(!fetchInterval){fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick()}}
 }
 
@@ -275,8 +275,8 @@ function ipFallback(ld){
   if(ipTried)return;ipTried=true;
   if(!ld)ld=document.getElementById('loading');
   if(ld&&ld.style.display==='none')return;
-  gs.textContent='Getting IP location...';gs.className='';
-  gs.onclick=null;
+  gs.textContent='GPS denied — getting IP...';
+  if(ld)ld.textContent='Getting IP location...';
   var x=new XMLHttpRequest();
   x.open('GET','https://ip-api.com/json/?fields=lat,lon,status,city,country',true);x.timeout=10000;
   x.onload=function(){
@@ -298,9 +298,9 @@ function fallback2(ld){
 function init(){
   applyTheme();
   var ld=document.getElementById('loading');
-  ld.textContent='Looking for GPS...';ld.onclick=retryGps;
-  gs.textContent='GPS: searching...';gs.className='';
-  retryGps();
+  ld.textContent='Tap to find your location';
+  ld.onclick=function(){retryGps()};
+  gs.textContent='Tap loading screen';gs.className='';
 }
 
 
