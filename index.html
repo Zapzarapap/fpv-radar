@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>FPV AirGuard</title>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
 :root {
@@ -58,7 +59,7 @@
 html,body{height:100%;width:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--page-bg);color:var(--page-fg);overflow:hidden}
 body{position:fixed;touch-action:manipulation}
 #map{height:100%;width:100%;z-index:1;position:relative}
-#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--api-msg);font-size:14px;z-index:2000;background:var(--loading-bg);padding:14px 22px;border-radius:10px;border:1px solid var(--loading-border);text-align:center;line-height:1.5;max-width:300px;cursor:pointer}
+#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--api-msg);font-size:14px;z-index:2000;background:var(--loading-bg);padding:14px 22px;border-radius:10px;border:1px solid var(--loading-border);text-align:center;line-height:1.5;max-width:300px}
 #controls{position:absolute;top:calc(10px + env(safe-area-inset-top,0px));left:calc(10px + env(safe-area-inset-left,0px));z-index:1000;background:var(--ctrl-bg);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border:1px solid var(--ctrl-border);border-radius:12px;padding:8px 10px;width:210px;box-shadow:0 4px 24px rgba(0,0,0,0.5);max-width:calc(100vw - 20px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px))}
 #controls .label{font-size:8px;text-transform:uppercase;letter-spacing:1.2px;color:var(--label);margin-bottom:2px}
 .cg{margin-bottom:4px}
@@ -136,7 +137,7 @@ body{position:fixed;touch-action:manipulation}
 </style>
 </head>
 <body>
-<div id="map"><div id="loading">Initializing...</div></div>
+<div id="loading">Locating via GPS…</div><div id="map"></div>
 <div id="controls">
 <div class="cg">
 <div class="label">Location<span id="lock-label">(unlocked)</span></div>
@@ -177,7 +178,7 @@ body{position:fixed;touch-action:manipulation}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 var CATEGORY={'0':'Unbekannt','1':'Keine Daten','2':'Klein','3':'Mittel','4':'Groß','5':'High Vortex','6':'Schwer','7':'Hochleistung','8':'Drehflügler','9':'Segelflugzeug','10':'Luftschiff','11':'Fallschirm','12':'Ultraleicht','13':'Reserviert','14':'UAV','15':'Weltraum','16':'Notfall','17':'Boden','A1':'Klein','A2':'Mittel','A3':'Groß','A4':'High Vortex','A5':'Schwer','A6':'Hochleistung','A7':'Drehflügler'};
-var map,pilotMarker,zoneCircle,tileLayer,pilotLat,pilotLng,monitoring=false,fetchInterval=null,renderTimer=null;
+var map,pilotMarker=null,zoneCircle,tileLayer,pilotLat,pilotLon,monitoring=false,fetchInterval=null,renderTimer=null;
 var markers={},prev={},acData={},disp={},locked=false,insideTimer=null,approachTimer=null;
 var gs=document.getElementById('gps-status');
 var theme=localStorage.getItem('ag-theme')||'dark';
@@ -201,11 +202,17 @@ function icn(h,c,cat){
 
 function setP(lat,lng,src){
   if(locked){var h=document.getElementById('lock-hint');h.classList.add('show');setTimeout(function(){h.classList.remove('show')},2500);return}
-  pilotLat=lat;pilotLng=lng;
+  pilotLat=lat;pilotLon=lng;
   document.getElementById('lat-input').value=lat.toFixed(5);
   document.getElementById('lng-input').value=lng.toFixed(5);
-  gs.textContent=src;gs.className='ok';gs.onclick=retryGps;
-  if(map){map.setView([pilotLat,pilotLng],12);if(pilotMarker)pilotMarker.setLatLng([pilotLat,pilotLng]);updC();if(!fetchInterval){fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick()}}
+  gs.textContent=src;gs.className='ok';
+  document.getElementById('loading').style.display='none';
+  clearInterval(posWatch);
+  clearTimeout(fallbackTimer);
+  if(!map){initMap();return}
+  map.setView([pilotLat,pilotLon],12);
+  if(pilotMarker)pilotMarker.setLatLng([pilotLat,pilotLon]);else pilotMarker=L.marker([pilotLat,pilotLon],{icon:L.divIcon({className:'pilot-marker',html:'<div class="pulse-dot"></div>',iconSize:[20,20],iconAnchor:[10,10]})}).addTo(map);
+  updC();if(!fetchInterval){fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick()}
 }
 
 function updLk(b,c){
@@ -242,66 +249,60 @@ document.getElementById('search-input').addEventListener('keydown',function(e){
   x.setRequestHeader('Accept','application/json');
   x.onload=function(){
     try{var d=JSON.parse(x.responseText);
-      if(d&&d.length>0){var lat=parseFloat(d[0].lat),lng=parseFloat(d[0].lon);setP(lat,lng,'Search: '+(d[0].display_name||q).substring(0,50));if(!map){initMap()}}
+      if(d&&d.length>0){var lat=parseFloat(d[0].lat),lng=parseFloat(d[0].lon);setP(lat,lng,'Search: '+(d[0].display_name||q).substring(0,50))}
       else{gs.textContent='Not found.';gs.className='fail'}}catch(e){gs.textContent='Search failed.';gs.className='fail'}
   };
   x.onerror=function(){gs.textContent='Network error.';gs.className='fail'};x.send();
 });
 
-function retryGps(){
-  ipTried=false;
-  var ld=document.getElementById('loading');
-  if(ld){ld.textContent='Looking for GPS...';ld.className=''}
-  gs.textContent='GPS: searching...';gs.className='';
+function initLocation() {
+  if (!navigator.geolocation) {
+    alert('Geolocation is not supported by this browser.');
+    return;
+  }
   navigator.geolocation.getCurrentPosition(
-    function(p){
-      setP(p.coords.latitude,p.coords.longitude,'GPS active');
-      var ld2=document.getElementById('loading');
-      if(ld2)ld2.style.display='none';
-      if(!map)initMap();
+    function(position) {
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      setPilotPosition(lat, lon);
     },
-    function(e){
-      console.warn('[AG] GPS:',e.code,e.message);
-      gs.textContent='GPS denied — tap to retry';gs.className='fail';
-      gs.onclick=retryGps;
-      var ld2=document.getElementById('loading');
-      if(ld2&&ld2.style.display!=='none')ipFallback(ld2);
+    function(error) {
+      alert('GPS error: ' + error.message + ' (code ' + error.code + ')');
     },
-    {enableHighAccuracy:true,timeout:30000,maximumAge:5000}
+    {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    }
   );
 }
-var ipTried=false;
-function ipFallback(ld){
-  if(ipTried)return;ipTried=true;
-  if(!ld)ld=document.getElementById('loading');
-  if(ld&&ld.style.display==='none')return;
-  gs.textContent='GPS denied — getting IP...';
-  if(ld)ld.textContent='Getting IP location...';
-  var x=new XMLHttpRequest();
-  x.open('GET','https://ip-api.com/json/?fields=lat,lon,status,city,country',true);x.timeout=10000;
-  x.onload=function(){
-    try{var d=JSON.parse(x.responseText);
-      if(d.status==='success'){var loc=(d.city||'')+(d.city&&d.country?', ':'')+(d.country||'');setP(d.lat,d.lon,loc||'IP location');if(ld)ld.style.display='none';if(!map)initMap()}
-      else throw Error(d.status)}catch(e){fallback2(ld)}
-  };
-  x.onerror=function(){fallback2(ld)};x.ontimeout=function(){fallback2(ld)};x.send();
+
+function setPilotPosition(lat, lon) {
+  pilotLat = lat;
+  pilotLon = lon;
+  map.setView([lat, lon], 13);
+  if (pilotMarker) {
+    pilotMarker.setLatLng([lat, lon]);
+  } else {
+    pilotMarker = L.marker([lat, lon]).addTo(map);
+  }
 }
-function fallback2(ld){
-  gs.textContent='Enter a location to begin';gs.className='fail';
-  gs.onclick=retryGps;
-  if(!ld)ld=document.getElementById('loading');
-  pilotLat=51.5074;pilotLng=-0.1278;
-  document.getElementById('lat-input').value='51.5074';document.getElementById('lng-input').value='-0.1278';
-  if(ld)ld.style.display='none';
-  if(!map)initMap();
-}
-function init(){
-  applyTheme();
-  var ld=document.getElementById('loading');
-  ld.textContent='Tap to find your location';
-  ld.onclick=function(){retryGps()};
-  gs.textContent='Tap loading screen';gs.className='';
-}
+
+var posWatch = setInterval(function() {
+  if (pilotLat != null && pilotLon != null) {
+    clearInterval(posWatch);
+    document.getElementById('loading').style.display='none';
+    gs.textContent='GPS position';gs.className='ok';
+    if(map){updC();if(!fetchInterval){fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick()}}
+  }
+}, 200);
+
+var fallbackTimer = setTimeout(function() {
+  if (pilotLat != null && pilotLon != null) return;
+  clearInterval(posWatch);
+  document.getElementById('loading').style.display='none';
+  gs.textContent='GPS unavailable. Search or enter coords.';gs.className='fail';
+}, 10000);
 
 
 
@@ -310,7 +311,6 @@ function setFromCoords(){
   var lat=parseFloat(document.getElementById('lat-input').value),lng=parseFloat(document.getElementById('lng-input').value);
   if(isNaN(lat)||isNaN(lng)||lat<-90||lat>90||lng<-180||lng>180){gs.textContent='Invalid coords.';gs.className='fail';return}
   setP(lat,lng,'Manual set');
-  if(!map){initMap()}
 }
 document.getElementById('lat-input').addEventListener('keydown',function(e){if(e.key==='Enter')setFromCoords()});
 document.getElementById('lng-input').addEventListener('keydown',function(e){if(e.key==='Enter')setFromCoords()});
@@ -336,20 +336,23 @@ function toggleTheme(){
 document.getElementById('theme-btn').addEventListener('click',toggleTheme);
 
 function initMap(){
-  map=L.map('map',{center:[pilotLat,pilotLng],zoom:12,zoomControl:true,attributionControl:true});
+  if(map)return;
+  map=L.map('map',{center:[0,0],zoom:2,zoomControl:true,attributionControl:true});
   swapTiles();
   setTimeout(function(){map.invalidateSize()},150);
   map.on('click',function(e){if(locked)return;setP(e.latlng.lat,e.latlng.lng,'Map click');updC()});
-  pilotMarker=L.marker([pilotLat,pilotLng],{icon:L.divIcon({className:'pilot-marker',html:'<div class="pulse-dot"></div>',iconSize:[20,20],iconAnchor:[10,10]})}).addTo(map);
-  updC();
-  fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick();
+  if(pilotLat!=null&&pilotLon!=null){
+    map.setView([pilotLat,pilotLon],12);
+    pilotMarker=L.marker([pilotLat,pilotLon],{icon:L.divIcon({className:'pilot-marker',html:'<div class="pulse-dot"></div>',iconSize:[20,20],iconAnchor:[10,10]})}).addTo(map);
+    updC();fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick();
+  }
 }
 
 function updC(){
-  if(!pilotLat||!pilotLng||!map)return;
+  if(!pilotLat||!pilotLon||!map)return;
   var rk=Math.max(parseFloat(document.getElementById('radius-input').value)||3,0.1);
-  if(zoneCircle){zoneCircle.setLatLng([pilotLat,pilotLng]);zoneCircle.setRadius(rk*1000)}
-  else{zoneCircle=L.circle([pilotLat,pilotLng],{radius:rk*1000,color:'#4488ff',weight:1.5,fillColor:'#4488ff',fillOpacity:0.05,opacity:0.4}).addTo(map)}
+  if(zoneCircle){zoneCircle.setLatLng([pilotLat,pilotLon]);zoneCircle.setRadius(rk*1000)}
+  else{zoneCircle=L.circle([pilotLat,pilotLon],{radius:rk*1000,color:'#4488ff',weight:1.5,fillColor:'#4488ff',fillOpacity:0.05,opacity:0.4}).addTo(map)}
 }
 document.getElementById('radius-input').addEventListener('input',updC);
 
@@ -416,9 +419,9 @@ function renderTick(){
 }
 
 async function fetchAc(){
-  if(!pilotLat||!pilotLng)return;
+  if(!pilotLat||!pilotLon)return;
   try{
-    var r=await fetch('https://api.airplanes.live/v2/point/'+pilotLat+'/'+pilotLng+'/54',{mode:'cors'});
+    var r=await fetch('https://api.airplanes.live/v2/point/'+pilotLat+'/'+pilotLon+'/54',{mode:'cors'});
     if(!r.ok)return;
     var t=await r.text();if(t.length<30)return;
     proc(JSON.parse(t).ac||[]);
@@ -427,7 +430,7 @@ async function fetchAc(){
 
 function cross(lat,lon,hdg,spd,rk){
   var R=rk*1000,cl=Math.cos(pilotLat*Math.PI/180);
-  var ax=(lon-pilotLng)*111320*cl,ay=(lat-pilotLat)*110540;
+  var ax=(lon-pilotLon)*111320*cl,ay=(lat-pilotLat)*110540;
   var h=hdg*Math.PI/180,dx=Math.sin(h),dy=Math.cos(h);
   var t=(-ax)*dx+(-ay)*dy;if(t<0)return false;
   var d=Math.sqrt((ax+t*dx)*(ax+t*dx)+(ay+t*dy)*(ay+t*dy));
@@ -437,7 +440,7 @@ function cross(lat,lon,hdg,spd,rk){
 function eta(lat,lon,hdg,spd,rk){
   if(hdg==null||spd==null||spd<=0)return null;
   var R=rk*1000,cl=Math.cos(pilotLat*Math.PI/180);
-  var ax=(lon-pilotLng)*111320*cl,ay=(lat-pilotLat)*110540;
+  var ax=(lon-pilotLon)*111320*cl,ay=(lat-pilotLat)*110540;
   var h=hdg*Math.PI/180,dx=Math.sin(h),dy=Math.cos(h);
   var b=2*(ax*dx+ay*dy),c=ax*ax+ay*ay-R*R;
   var d=b*b-4*c;if(d<0)return null;
@@ -450,7 +453,7 @@ function eta(lat,lon,hdg,spd,rk){
 function ete(lat,lon,hdg,spd,rk){
   if(hdg==null||spd==null||spd<=0)return null;
   var R=rk*1000,cl=Math.cos(pilotLat*Math.PI/180);
-  var ax=(lon-pilotLng)*111320*cl,ay=(lat-pilotLat)*110540;
+  var ax=(lon-pilotLon)*111320*cl,ay=(lat-pilotLat)*110540;
   var h=hdg*Math.PI/180,dx=Math.sin(h),dy=Math.cos(h);
   var b=2*(ax*dx+ay*dy),c=ax*ax+ay*ay-R*R;
   var d=b*b-4*c;if(d<0)return null;
@@ -461,7 +464,7 @@ function ete(lat,lon,hdg,spd,rk){
 
 function zs(a){
   var rk=Math.max(parseFloat(document.getElementById('radius-input').value)||3,0.1);
-  var d=dist(a.lat,a.lon,pilotLat,pilotLng);
+  var d=dist(a.lat,a.lon,pilotLat,pilotLon);
   if(d<=rk)return{s:'inside',eta:null,ete:a.track!=null&&a.gs!=null&&a.gs>0?ete(a.lat,a.lon,a.track,a.gs,rk):null};
   if(a.track==null||a.gs==null||a.gs<=0)return{s:'passing',eta:null,ete:null};
   if(cross(a.lat,a.lon,a.track,a.gs,rk))return{s:'approaching',eta:eta(a.lat,a.lon,a.track,a.gs,rk),ete:null};
@@ -492,7 +495,7 @@ function proc(ac){
   var has=false;
   for(var i=0;i<ac.length;i++){
     var a=ac[i],id=a.hex;if(!id||ns[id]!=='approaching')continue;
-    if(a.gs>0){var rk=Math.max(parseFloat(document.getElementById('radius-input').value)||3,0.1);var d=dist(a.lat,a.lon,pilotLat,pilotLng);if((d-rk)/(a.gs*0.0308667)<5){has=true;break}}
+    if(a.gs>0){var rk=Math.max(parseFloat(document.getElementById('radius-input').value)||3,0.1);var d=dist(a.lat,a.lon,pilotLat,pilotLon);if((d-rk)/(a.gs*0.0308667)<5){has=true;break}}
   }
   if(monitoring&&has&&!approachTimer){
     var at=function(){play('sine',440,0.2,0.15);setTimeout(function(){play('sine',440,0.2,0.15)},600);setTimeout(function(){play('sine',440,0.2,0.15)},1200)};
@@ -504,7 +507,7 @@ function proc(ac){
 
 function pop(a,sr){
   var af=a.alt_geom!=null?a.alt_geom:a.alt_baro,am=af!=null?(af*0.3048).toFixed(0):'—',sk=a.gs!=null?a.gs:a.tas,skh=sk!=null?(sk*1.852).toFixed(0):'—';
-  var d=dist(a.lat,a.lon,pilotLat,pilotLng);
+  var d=dist(a.lat,a.lon,pilotLat,pilotLon);
   var ct=CATEGORY[(''+a.category).toUpperCase()];if(!ct)ct=a.category!=null?a.category:'—';
   var cs=((a.flight||'')+'').trim()||'?';
   var sl=sr.s==='inside'?'Inside Zone':sr.s==='approaching'?'Approaching':'Passing',ex='';
@@ -532,7 +535,7 @@ function updateBar(inside,approaching,passing){
   document.getElementById('count-passing').textContent=passing||0;
 }
 
-if(typeof L!=='undefined')document.addEventListener('DOMContentLoaded',init);
+if(typeof L!=='undefined')document.addEventListener('DOMContentLoaded',function(){applyTheme();initMap();initLocation()});
 else document.getElementById('loading').textContent='Error: Leaflet failed to load.';
 </script>
 </body>
