@@ -178,373 +178,662 @@ body{position:fixed;touch-action:manipulation}
 <div id="flash"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var CATEGORY={'0':'Unbekannt','1':'Keine Daten','2':'Klein','3':'Mittel','4':'Groß','5':'High Vortex','6':'Schwer','7':'Hochleistung','8':'Drehflügler','9':'Segelflugzeug','10':'Luftschiff','11':'Fallschirm','12':'Ultraleicht','13':'Reserviert','14':'UAV','15':'Weltraum','16':'Notfall','17':'Boden','A1':'Klein','A2':'Mittel','A3':'Groß','A4':'High Vortex','A5':'Schwer','A6':'Hochleistung','A7':'Drehflügler'};
-var map,pilotMarker=null,zoneCircle,tileLayer,pilotLat,pilotLon,monitoring=false,fetchInterval=null,renderTimer=null;
-var markers={},prev={},acData={},disp={},locked=false,insideTimer=null,approachTimer=null;
-var gs=document.getElementById('gps-status');
-var theme=localStorage.getItem('ag-theme')||'dark';
+// ============================================
+// Constants
+// ============================================
 
-function lkSvg(c){
-  return'<svg viewBox="0 0 10 12" width="9" height="11"><rect x="1" y="4" width="8" height="7" rx="0.8" fill="currentColor"/><path d="M2.5 4V2.5a2.5 2.5 0 0 1 5 0'+(c?'V4':'')+'" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+const CATEGORY = {'0':'Unbekannt','1':'Keine Daten','2':'Klein','3':'Mittel','4':'Groß','5':'High Vortex','6':'Schwer','7':'Hochleistung','8':'Drehflügler','9':'Segelflugzeug','10':'Luftschiff','11':'Fallschirm','12':'Ultraleicht','13':'Reserviert','14':'UAV','15':'Weltraum','16':'Notfall','17':'Boden','A1':'Klein','A2':'Mittel','A3':'Groß','A4':'High Vortex','A5':'Schwer','A6':'Hochleistung','A7':'Drehflügler'};
+
+const METERS_PER_DEG_LAT = 110540;
+const METERS_PER_DEG_LON = 111320;
+const KNOTS_TO_KMPH = 1.852;
+const KNOTS_TO_MPS = 0.514444;
+const EARTH_RADIUS_KM = 6371;
+
+// ============================================
+// State
+// ============================================
+
+let map;
+let pilotMarker = null;
+let zoneCircle;
+let tileLayer;
+let pilotLat;
+let pilotLon;
+let monitoring = false;
+let fetchInterval = null;
+const markers = {};
+let prev = {};
+let locked = false;
+let insideTimer = null;
+let approachTimer = null;
+let audioCtx = null;
+let homeLat = null;
+let homeLon = null;
+
+const gpsStatusEl = document.getElementById('gps-status');
+let theme = localStorage.getItem('ag-theme') || 'dark';
+
+// ============================================
+// Helpers
+// ============================================
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function icn(h,c,cat){
-  var s=+cat===8||cat==='A7'||cat==='a7'? // Helicopter
-    '<svg viewBox="0 0 24 24" width="21" height="21"><rect x="8" y="12" width="8" height="4" rx="1.2" fill="'+c+'" stroke="rgba(0,0,0,0.35)" stroke-width="0.6"/><rect x="11" y="8" width="2" height="4" fill="'+c+'" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/><rect x="3" y="9.5" width="18" height="2" rx="0.8" fill="'+c+'" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/><rect x="14" y="13" width="5" height="1.5" rx="0.6" fill="'+c+'" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/></svg>':
-    +cat===7||cat==='A6'||cat==='a6'? // Fighter jet
-    '<svg viewBox="0 0 24 24" width="21" height="21"><path d="M12 3L3 18h18z" fill="'+c+'" stroke="rgba(0,0,0,0.35)" stroke-width="0.6"/><rect x="11" y="3" width="2" height="6" fill="'+c+'" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/><rect x="5.5" y="16" width="13" height="2" rx="0.8" fill="'+c+'" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/></svg>':
-    // Default airplane
-    '<svg viewBox="0 0 24 24" width="21" height="21"><path d="M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" fill="'+c+'" stroke="rgba(0,0,0,0.35)" stroke-width="0.6" opacity="0.95"/></svg>';
+function lockIconSvg(locked) {
+  return '<svg viewBox="0 0 10 12" width="9" height="11"><rect x="1" y="4" width="8" height="7" rx="0.8" fill="currentColor"/><path d="M2.5 4V2.5a2.5 2.5 0 0 1 5 0' + (locked ? 'V4' : '') + '" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+}
+
+function themeIconSvg(isDark) {
+  return isDark
+    ? '<svg viewBox="0 0 14 14" width="15" height="15"><circle cx="7" cy="7" r="2.5" fill="currentColor"/><g stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><line x1="7" y1=".5" x2="7" y2="3"/><line x1="7" y1="11" x2="7" y2="13.5"/><line x1=".5" y1="7" x2="3" y2="7"/><line x1="11" y1="7" x2="13.5" y2="7"/><line x1="1.8" y1="1.8" x2="3.6" y2="3.6"/><line x1="10.4" y1="10.4" x2="12.2" y2="12.2"/><line x1="1.8" y1="12.2" x2="3.6" y2="10.4"/><line x1="10.4" y1="3.6" x2="12.2" y2="1.8"/></g></svg>'
+    : '<svg viewBox="0 0 14 14" width="15" height="15"><path d="M9 2A5 5 0 1 0 12 7A4 4 0 0 1 9 2z" fill="currentColor"/></svg>';
+}
+
+function getAudioContext() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function play(oscType, freq, gain, dur) {
+  try {
+    const ctx = getAudioContext();
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    osc.type = oscType;
+    osc.frequency.value = freq;
+    const startTime = ctx.currentTime;
+    gainNode.gain.setValueAtTime(gain, startTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
+    osc.start(startTime);
+    osc.stop(startTime + dur);
+  } catch (e) {
+    console.error('[AG] play:', e);
+  }
+}
+
+function fmt(minutes) {
+  if (minutes == null || minutes < 0) return 'N/A';
+  let min = Math.floor(minutes);
+  let sec = Math.round((minutes - min) * 60);
+  if (sec >= 60) { min += 1; sec = 0; }
+  return min + ':' + (sec < 10 ? '0' : '') + sec;
+}
+
+function dist(lat1, lon1, lat2, lon2) {
+  const dlat = (lat2 - lat1) * Math.PI / 180;
+  const dlon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dlat / 2) * Math.sin(dlat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dlon / 2) * Math.sin(dlon / 2);
+  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ============================================
+// Aircraft Icon
+// ============================================
+
+function aircraftIcon(heading, color, category) {
+  const cat = String(category).toUpperCase();
+  let svg;
+  if (cat === '8' || cat === 'A7') {
+    svg = '<svg viewBox="0 0 24 24" width="21" height="21"><rect x="8" y="12" width="8" height="4" rx="1.2" fill="' + color + '" stroke="rgba(0,0,0,0.35)" stroke-width="0.6"/><rect x="11" y="8" width="2" height="4" fill="' + color + '" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/><rect x="3" y="9.5" width="18" height="2" rx="0.8" fill="' + color + '" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/><rect x="14" y="13" width="5" height="1.5" rx="0.6" fill="' + color + '" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/></svg>';
+  } else if (cat === '7' || cat === 'A6') {
+    svg = '<svg viewBox="0 0 24 24" width="21" height="21"><path d="M12 3L3 18h18z" fill="' + color + '" stroke="rgba(0,0,0,0.35)" stroke-width="0.6"/><rect x="11" y="3" width="2" height="6" fill="' + color + '" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/><rect x="5.5" y="16" width="13" height="2" rx="0.8" fill="' + color + '" stroke="rgba(0,0,0,0.35)" stroke-width="0.5"/></svg>';
+  } else {
+    svg = '<svg viewBox="0 0 24 24" width="21" height="21"><path d="M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" fill="' + color + '" stroke="rgba(0,0,0,0.35)" stroke-width="0.6" opacity="0.95"/></svg>';
+  }
   return L.divIcon({
-    html:'<div class="aircraft-icon" style="width:21px;height:21px;transform:rotate('+(h!=null?h:0)+'deg);transform-origin:center">'+s+'</div>',
-    className:'',iconSize:[21,21],iconAnchor:[10,10]
+    html: '<div class="aircraft-icon" style="width:21px;height:21px;transform:rotate(' + (heading != null ? heading : 0) + 'deg);transform-origin:center">' + svg + '</div>',
+    className: '',
+    iconSize: [21, 21],
+    iconAnchor: [10, 10]
   });
 }
 
-function setP(lat,lng,src){
-  if(locked){var h=document.getElementById('lock-hint');h.classList.add('show');setTimeout(function(){h.classList.remove('show')},2500);return}
-  pilotLat=lat;pilotLon=lng;
-  document.getElementById('lat-input').value=lat.toFixed(5);
-  document.getElementById('lng-input').value=lng.toFixed(5);
-  gs.textContent=src;gs.className='ok';
-  document.getElementById('loading').style.display='none';
-  clearInterval(posWatch);
+// ============================================
+// Zone Geometry
+// ============================================
+
+function cross(lat, lon, hdg, spd, rk) {
+  const R = rk * 1000;
+  const cl = Math.cos(pilotLat * Math.PI / 180);
+  const ax = (lon - pilotLon) * METERS_PER_DEG_LON * cl;
+  const ay = (lat - pilotLat) * METERS_PER_DEG_LAT;
+  const h = hdg * Math.PI / 180;
+  const dx = Math.sin(h);
+  const dy = Math.cos(h);
+  const t = (-ax) * dx + (-ay) * dy;
+  if (t < 0) return false;
+  const d = Math.sqrt((ax + t * dx) * (ax + t * dx) + (ay + t * dy) * (ay + t * dy));
+  return d <= R;
+}
+
+function eta(lat, lon, hdg, spd, rk) {
+  if (hdg == null || spd == null || spd <= 0) return null;
+  const R = rk * 1000;
+  const cl = Math.cos(pilotLat * Math.PI / 180);
+  const ax = (lon - pilotLon) * METERS_PER_DEG_LON * cl;
+  const ay = (lat - pilotLat) * METERS_PER_DEG_LAT;
+  const h = hdg * Math.PI / 180;
+  const dx = Math.sin(h);
+  const dy = Math.cos(h);
+  const b = 2 * (ax * dx + ay * dy);
+  const c = ax * ax + ay * ay - R * R;
+  const d = b * b - 4 * c;
+  if (d < 0) return null;
+  const sqrtD = Math.sqrt(d);
+  const t1 = (-b - sqrtD) / 2;
+  const t2 = (-b + sqrtD) / 2;
+  const te = t1 > 0 ? (t1 < t2 ? t1 : t2) : t2 > 0 ? t2 : null;
+  if (te == null || te <= 0) return null;
+  return te / (spd * KNOTS_TO_MPS) / 60;
+}
+
+function ete(lat, lon, hdg, spd, rk) {
+  if (hdg == null || spd == null || spd <= 0) return null;
+  const R = rk * 1000;
+  const cl = Math.cos(pilotLat * Math.PI / 180);
+  const ax = (lon - pilotLon) * METERS_PER_DEG_LON * cl;
+  const ay = (lat - pilotLat) * METERS_PER_DEG_LAT;
+  const h = hdg * Math.PI / 180;
+  const dx = Math.sin(h);
+  const dy = Math.cos(h);
+  const b = 2 * (ax * dx + ay * dy);
+  const c = ax * ax + ay * ay - R * R;
+  const d = b * b - 4 * c;
+  if (d < 0) return null;
+  const te = Math.max((-b + Math.sqrt(d)) / 2, (-b - Math.sqrt(d)) / 2);
+  if (te <= 0) return null;
+  return te / (spd * KNOTS_TO_MPS) / 60;
+}
+
+function getZoneStatus(aircraft) {
+  const rk = Math.max(parseFloat(document.getElementById('radius-input').value) || 3, 0.1);
+  const d = dist(aircraft.lat, aircraft.lon, pilotLat, pilotLon);
+  if (d <= rk) {
+    return {
+      s: 'inside',
+      eta: null,
+      ete: aircraft.track != null && aircraft.gs != null && aircraft.gs > 0
+        ? ete(aircraft.lat, aircraft.lon, aircraft.track, aircraft.gs, rk)
+        : null
+    };
+  }
+  if (aircraft.track == null || aircraft.gs == null || aircraft.gs <= 0) {
+    return { s: 'passing', eta: null, ete: null };
+  }
+  if (cross(aircraft.lat, aircraft.lon, aircraft.track, aircraft.gs, rk)) {
+    return { s: 'approaching', eta: eta(aircraft.lat, aircraft.lon, aircraft.track, aircraft.gs, rk), ete: null };
+  }
+  return { s: 'passing', eta: null, ete: null };
+}
+
+// ============================================
+// Pilot Position
+// ============================================
+
+function setPilotPosition(lat, lng, source) {
+  if (locked) {
+    const hint = document.getElementById('lock-hint');
+    hint.classList.add('show');
+    setTimeout(() => hint.classList.remove('show'), 2500);
+    return;
+  }
+  pilotLat = lat;
+  pilotLon = lng;
+  document.getElementById('lat-input').value = lat.toFixed(5);
+  document.getElementById('lng-input').value = lng.toFixed(5);
+  gpsStatusEl.textContent = source;
+  gpsStatusEl.className = 'ok';
+  document.getElementById('loading').style.display = 'none';
   clearTimeout(fallbackTimer);
-  if(!map){initMap();return}
-  map.setView([pilotLat,pilotLon],12);
-  if(pilotMarker)pilotMarker.setLatLng([pilotLat,pilotLon]);else pilotMarker=L.marker([pilotLat,pilotLon],{icon:L.divIcon({className:'pilot-marker',html:'<div class="pulse-dot"></div>',iconSize:[20,20],iconAnchor:[10,10]})}).addTo(map);
-  updC();if(!fetchInterval){fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick()}
+  if (!map) { initMap(); return; }
+  map.setView([pilotLat, pilotLon], 12);
+  if (pilotMarker) {
+    pilotMarker.setLatLng([pilotLat, pilotLon]);
+  } else {
+    pilotMarker = L.marker([pilotLat, pilotLon], {
+      icon: L.divIcon({
+        className: 'pilot-marker',
+        html: '<div class="pulse-dot"></div>',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      })
+    }).addTo(map);
+  }
+  updateZoneCircle();
+  if (!fetchInterval) {
+    fetchAircraft();
+  }
 }
 
-function updLk(b,c){
-  if(b){b.innerHTML=lkSvg(c);b.classList.toggle('lock-on',c)}
+function updateLockButton(btn, lockedState) {
+  if (btn) {
+    btn.innerHTML = lockIconSvg(lockedState);
+    btn.classList.toggle('lock-on', lockedState);
+  }
 }
 
-function toggleLock(){
-  locked=!locked;
-  updLk(document.getElementById('lock-btn'),locked);
-  updLk(document.getElementById('lock-btn-c'),locked);
-  var l=document.getElementById('lock-label');
-  l.textContent=locked?'(locked)':'(unlocked)';l.classList.toggle('locked',locked);
-  try{acx_();play('sine',700,0.1,0.05)}catch(e){}
+function toggleLock() {
+  locked = !locked;
+  updateLockButton(document.getElementById('lock-btn'), locked);
+  updateLockButton(document.getElementById('lock-btn-c'), locked);
+  const label = document.getElementById('lock-label');
+  label.textContent = locked ? '(locked)' : '(unlocked)';
+  label.classList.toggle('locked', locked);
+  try { getAudioContext(); play('sine', 700, 0.1, 0.05); } catch (e) { /* ignored */ }
 }
-document.getElementById('lock-btn').addEventListener('click',toggleLock);
-document.getElementById('lock-btn-c').addEventListener('click',toggleLock);
 
-document.getElementById('show-coord').addEventListener('click',function(){
-  document.getElementById('search-mode').style.display='none';
-  document.getElementById('coord-mode').classList.add('show');
-});
-document.getElementById('show-search').addEventListener('click',function(){
-  document.getElementById('search-mode').style.display='flex';
-  document.getElementById('coord-mode').classList.remove('show');
-});
+function setFromCoords() {
+  if (locked) {
+    const hint = document.getElementById('lock-hint');
+    hint.classList.add('show');
+    setTimeout(() => hint.classList.remove('show'), 2500);
+    return;
+  }
+  const lat = parseFloat(document.getElementById('lat-input').value);
+  const lng = parseFloat(document.getElementById('lng-input').value);
+  if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    gpsStatusEl.textContent = 'Invalid coords.';
+    gpsStatusEl.className = 'fail';
+    return;
+  }
+  setPilotPosition(lat, lng, 'Manual set');
+}
 
-document.getElementById('search-input').addEventListener('keydown',function(e){
-  if(e.key!=='Enter')return;
-  if(locked){var h=document.getElementById('lock-hint');h.classList.add('show');setTimeout(function(){h.classList.remove('show')},2500);return}
-  var q=this.value.trim();if(!q)return;
-  gs.textContent='Searching...';gs.className='';
-  var x=new XMLHttpRequest();
-  x.open('GET','https://nominatim.openstreetmap.org/search?format=json&q='+encodeURIComponent(q)+'&limit=1',true);x.timeout=10000;
-  x.setRequestHeader('Accept','application/json');
-  x.onload=function(){
-    try{var d=JSON.parse(x.responseText);
-      if(d&&d.length>0){var lat=parseFloat(d[0].lat),lng=parseFloat(d[0].lon);setP(lat,lng,'Search: '+(d[0].display_name||q).substring(0,50))}
-      else{gs.textContent='Not found.';gs.className='fail'}}catch(e){gs.textContent='Search failed.';gs.className='fail'}
-  };
-  x.onerror=function(){gs.textContent='Network error.';gs.className='fail'};x.send();
-});
+// ============================================
+// Zone Circle
+// ============================================
 
-function initLocation() {
+function updateZoneCircle() {
+  if (!pilotLat || !pilotLon || !map) return;
+  const rk = Math.max(parseFloat(document.getElementById('radius-input').value) || 3, 0.1);
+  if (zoneCircle) {
+    zoneCircle.setLatLng([pilotLat, pilotLon]);
+    zoneCircle.setRadius(rk * 1000);
+  } else {
+    zoneCircle = L.circle([pilotLat, pilotLon], {
+      radius: rk * 1000,
+      color: '#4488ff',
+      weight: 1.5,
+      fillColor: '#4488ff',
+      fillOpacity: 0.05,
+      opacity: 0.4
+    }).addTo(map);
+  }
+}
+
+// ============================================
+// Map
+// ============================================
+
+function swapTiles() {
+  const url = theme === 'dark'
+    ? 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png'
+    : 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png';
+  if (tileLayer) {
+    tileLayer.setUrl(url);
+  } else if (map) {
+    tileLayer = L.tileLayer(url, {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'
+    }).addTo(map);
+  }
+}
+
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', theme);
+  swapTiles();
+  const btn = document.getElementById('theme-btn');
+  if (btn) btn.innerHTML = themeIconSvg(theme === 'dark');
+}
+
+function toggleTheme() {
+  theme = theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('ag-theme', theme);
+  applyTheme();
+}
+
+function initMap() {
+  if (map) return;
+  map = L.map('map', { center: [0, 0], zoom: 2, zoomControl: true, attributionControl: true });
+  swapTiles();
+  setTimeout(() => map.invalidateSize(), 150);
+  map.on('click', (e) => {
+    if (locked) return;
+    setPilotPosition(e.latlng.lat, e.latlng.lng, 'Map click');
+  });
+  if (pilotLat != null && pilotLon != null) {
+    map.setView([pilotLat, pilotLon], 12);
+    pilotMarker = L.marker([pilotLat, pilotLon], {
+      icon: L.divIcon({
+        className: 'pilot-marker',
+        html: '<div class="pulse-dot"></div>',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      })
+    }).addTo(map);
+    updateZoneCircle();
+    fetchAircraft();
+  }
+}
+
+// ============================================
+// GPS Initialization
+// ============================================
+
+let fallbackTimer = setTimeout(() => {
+  if (pilotLat != null && pilotLon != null) return;
+  document.getElementById('loading').style.display = 'none';
+  gpsStatusEl.textContent = 'GPS unavailable. Search or enter coords.';
+  gpsStatusEl.className = 'fail';
+}, 10000);
+
+function initGPS() {
   if (!navigator.geolocation) {
-    alert('Geolocation is not supported by this browser.');
+    gpsStatusEl.textContent = 'GPS not available';
+    gpsStatusEl.className = 'fail';
     return;
   }
   navigator.geolocation.getCurrentPosition(
-    function(position) {
-      const lat = position.coords.latitude;
-      const lon = position.coords.longitude;
-      setPilotPosition(lat, lon);
+    (position) => {
+      homeLat = position.coords.latitude;
+      homeLon = position.coords.longitude;
+      setPilotPosition(homeLat, homeLon, 'GPS position');
     },
-    function(error) {
+    (error) => {
       alert('GPS error: ' + error.message + ' (code ' + error.code + ')');
     },
-    {
-      enableHighAccuracy: true,
-      timeout: 10000,
-      maximumAge: 0
-    }
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
   );
 }
 
-function setPilotPosition(lat, lon) {
-  pilotLat = lat;
-  pilotLon = lon;
-  map.setView([lat, lon], 13);
-  if (pilotMarker) {
-    pilotMarker.setLatLng([lat, lon]);
+// ============================================
+// Monitoring
+// ============================================
+
+function startWarning() {
+  if (!pilotLat || !map) return;
+  getAudioContext();
+  monitoring = true;
+  const btn = document.getElementById('toggle-btn');
+  btn.innerHTML = '<span class="ico">&#9632;</span>';
+  btn.classList.add('active');
+  stopApproachAlarm();
+  if (insideTimer) { clearInterval(insideTimer); insideTimer = null; }
+}
+
+function stopWarning() {
+  monitoring = false;
+  const btn = document.getElementById('toggle-btn');
+  btn.innerHTML = '<span class="ico ico-play">&#9654;</span>';
+  btn.classList.remove('active');
+  if (insideTimer) { clearInterval(insideTimer); insideTimer = null; }
+  stopApproachAlarm();
+}
+
+function stopApproachAlarm() {
+  if (approachTimer) { clearInterval(approachTimer); approachTimer = null; }
+}
+
+function toggleMonitoring() {
+  monitoring ? stopWarning() : startWarning();
+}
+
+// ============================================
+// Aircraft Data
+// ============================================
+
+async function fetchAircraft() {
+  if (!pilotLat || !pilotLon) return;
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch('https://api.airplanes.live/v2/point/' + pilotLat + '/' + pilotLon + '/54', { mode: 'cors', signal: ctl.signal });
+    clearTimeout(timer);
+    if (r.ok) {
+      const text = await r.text();
+      if (text.length >= 30) processAircraft(JSON.parse(text).ac || []);
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error('[AG] fetch:', e);
+  }
+  fetchInterval = setTimeout(fetchAircraft, 1000);
+}
+
+function buildPopupHtml(aircraft, zoneStatus) {
+  const altFeet = aircraft.alt_geom != null ? aircraft.alt_geom : aircraft.alt_baro;
+  const altM = altFeet != null ? (altFeet * 0.3048).toFixed(0) : '\u2014';
+  const speedKnots = aircraft.gs != null ? aircraft.gs : aircraft.tas;
+  const speedKmh = speedKnots != null ? (speedKnots * KNOTS_TO_KMPH).toFixed(0) : '\u2014';
+  const d = dist(aircraft.lat, aircraft.lon, pilotLat, pilotLon);
+  const catKey = ('' + aircraft.category).toUpperCase();
+  let catLabel = CATEGORY[catKey];
+  if (!catLabel) catLabel = aircraft.category != null ? aircraft.category : '\u2014';
+  const callSign = ((aircraft.flight || '') + '').trim() || '?';
+
+  let statusLabel, extra = '';
+  if (zoneStatus.s === 'inside') {
+    statusLabel = 'Inside Zone';
+    if (zoneStatus.ete != null) {
+      extra += '<div class="popup-row"><span class="popup-label">ETE</span><span class="popup-value">' + fmt(zoneStatus.ete) + '</span></div>';
+    }
+  } else if (zoneStatus.s === 'approaching') {
+    statusLabel = 'Approaching';
+    if (zoneStatus.eta != null) {
+      extra += '<div class="popup-row"><span class="popup-label">ETA</span><span class="popup-value">' + fmt(zoneStatus.eta) + '</span></div>';
+    }
   } else {
-    pilotMarker = L.marker([lat, lon]).addTo(map);
+    statusLabel = 'Passing';
   }
+
+  return '<div class="popup-content">' +
+    '<div class="popup-row"><span class="popup-label">Flight</span><span class="popup-value">' + escapeHtml(callSign) + '</span></div>' +
+    '<div class="popup-row"><span class="popup-label">Type</span><span class="popup-value">' + escapeHtml(catLabel) + '</span></div>' +
+    '<div class="popup-row"><span class="popup-label">Alt</span><span class="popup-value">' + altM + ' m</span></div>' +
+    '<div class="popup-row"><span class="popup-label">Speed</span><span class="popup-value">' + speedKmh + ' km/h</span></div>' +
+    '<div class="popup-row"><span class="popup-label">Dist</span><span class="popup-value">' + d.toFixed(1) + ' km</span></div>' +
+    extra +
+    '<div class="popup-status status-' + zoneStatus.s + '">' + statusLabel + '</div>' +
+    '</div>';
 }
 
-var posWatch = setInterval(function() {
-  if (pilotLat != null && pilotLon != null) {
-    clearInterval(posWatch);
-    document.getElementById('loading').style.display='none';
-    gs.textContent='GPS position';gs.className='ok';
-    if(map){updC();if(!fetchInterval){fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick()}}
+function updateStatusBar(inside, approaching, passing) {
+  document.getElementById('count-inside').textContent = inside || 0;
+  document.getElementById('count-approaching').textContent = approaching || 0;
+  document.getElementById('count-passing').textContent = passing || 0;
+}
+
+// ============================================
+// Aircraft Processing
+// ============================================
+
+function triggerFlash() {
+  const el = document.getElementById('flash');
+  el.style.transition = 'none';
+  el.style.opacity = '0.15';
+  void el.offsetWidth;
+  el.style.transition = 'opacity 0.5s ease-out';
+  el.style.opacity = '0';
+}
+
+function processAircraft(aircraft) {
+  const ids = {};
+  const statusMap = {};
+  let inside = 0, approaching = 0, passing = 0;
+  const approachingAircraft = [];
+
+  for (const a of aircraft) {
+    const id = a.hex, lat = a.lat, lon = a.lon;
+    if (!id || lat == null || lon == null || isNaN(lat) || isNaN(lon)) continue;
+    ids[id] = true;
+
+    const status = getZoneStatus(a);
+    const statusStr = status.s;
+    statusMap[id] = statusStr;
+    if (statusStr === 'inside') inside++;
+    else if (statusStr === 'approaching') { approaching++; approachingAircraft.push(a); }
+    else passing++;
+
+    const color = statusStr === 'inside' ? '#ff4444' : statusStr === 'approaching' ? '#ffcc00' : '#44ff44';
+    const popupHtml = buildPopupHtml(a, status);
+    if (markers[id]) {
+      markers[id].setLatLng([lat, lon]);
+      markers[id].setIcon(aircraftIcon(a.track, color, a.category));
+      markers[id].setPopupContent(popupHtml);
+    } else {
+      const m = L.marker([lat, lon], { icon: aircraftIcon(a.track, color, a.category) }).addTo(map);
+      m.bindPopup(popupHtml);
+      markers[id] = m;
+    }
+
+    if (monitoring && statusStr === 'inside' && prev[id] !== 'inside') {
+      play('square', 888, 0.3, 2);
+      triggerFlash();
+    }
   }
-}, 200);
 
-var fallbackTimer = setTimeout(function() {
-  if (pilotLat != null && pilotLon != null) return;
-  clearInterval(posWatch);
-  document.getElementById('loading').style.display='none';
-  gs.textContent='GPS unavailable. Search or enter coords.';gs.className='fail';
-}, 10000);
-
-
-
-function setFromCoords(){
-  if(locked){var h=document.getElementById('lock-hint');h.classList.add('show');setTimeout(function(){h.classList.remove('show')},2500);return}
-  var lat=parseFloat(document.getElementById('lat-input').value),lng=parseFloat(document.getElementById('lng-input').value);
-  if(isNaN(lat)||isNaN(lng)||lat<-90||lat>90||lng<-180||lng>180){gs.textContent='Invalid coords.';gs.className='fail';return}
-  setP(lat,lng,'Manual set');
-}
-document.getElementById('lat-input').addEventListener('keydown',function(e){if(e.key==='Enter')setFromCoords()});
-document.getElementById('lng-input').addEventListener('keydown',function(e){if(e.key==='Enter')setFromCoords()});
-
-function swapTiles(){
-  var url=theme==='dark'?'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png':'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png';
-  if(tileLayer){tileLayer.setUrl(url)}
-  else if(map){tileLayer=L.tileLayer(url,{maxZoom:19,attribution:'&copy; <a href="https://openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'}).addTo(map)}
-}
-
-function thIcn(d){
-  return d
-    ?'<svg viewBox="0 0 14 14" width="15" height="15"><circle cx="7" cy="7" r="2.5" fill="currentColor"/><g stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><line x1="7" y1=".5" x2="7" y2="3"/><line x1="7" y1="11" x2="7" y2="13.5"/><line x1=".5" y1="7" x2="3" y2="7"/><line x1="11" y1="7" x2="13.5" y2="7"/><line x1="1.8" y1="1.8" x2="3.6" y2="3.6"/><line x1="10.4" y1="10.4" x2="12.2" y2="12.2"/><line x1="1.8" y1="12.2" x2="3.6" y2="10.4"/><line x1="10.4" y1="3.6" x2="12.2" y2="1.8"/></g></svg>'
-    :'<svg viewBox="0 0 14 14" width="15" height="15"><path d="M9 2A5 5 0 1 0 12 7A4 4 0 0 1 9 2z" fill="currentColor"/></svg>';
-}
-
-function applyTheme(){
-  document.documentElement.setAttribute('data-theme',theme);
-  swapTiles();
-  var tb=document.getElementById('theme-btn');
-  if(tb)tb.innerHTML=thIcn(theme==='dark');
-}
-
-function toggleTheme(){
-  theme=theme==='dark'?'light':'dark';
-  localStorage.setItem('ag-theme',theme);
-  applyTheme();
-}
-document.getElementById('theme-btn').addEventListener('click',toggleTheme);
-document.getElementById('controls').addEventListener('wheel',function(e){e.preventDefault()},{passive:false});
-
-function initMap(){
-  if(map)return;
-  map=L.map('map',{center:[0,0],zoom:2,zoomControl:true,attributionControl:true});
-  swapTiles();
-  setTimeout(function(){map.invalidateSize()},150);
-  map.on('click',function(e){if(locked)return;setP(e.latlng.lat,e.latlng.lng,'Map click');updC()});
-  if(pilotLat!=null&&pilotLon!=null){
-    map.setView([pilotLat,pilotLon],12);
-    pilotMarker=L.marker([pilotLat,pilotLon],{icon:L.divIcon({className:'pilot-marker',html:'<div class="pulse-dot"></div>',iconSize:[20,20],iconAnchor:[10,10]})}).addTo(map);
-    updC();fetchAc();fetchInterval=setInterval(fetchAc,500);renderTick();
+  for (const id in markers) {
+    if (!ids[id]) {
+      map.removeLayer(markers[id]);
+      delete markers[id];
+    }
   }
-}
+  for (const id in prev) {
+    if (!ids[id]) delete prev[id];
+  }
 
-function updC(){
-  if(!pilotLat||!pilotLon||!map)return;
-  var rk=Math.max(parseFloat(document.getElementById('radius-input').value)||3,0.1);
-  if(zoneCircle){zoneCircle.setLatLng([pilotLat,pilotLon]);zoneCircle.setRadius(rk*1000)}
-  else{zoneCircle=L.circle([pilotLat,pilotLon],{radius:rk*1000,color:'#4488ff',weight:1.5,fillColor:'#4488ff',fillOpacity:0.05,opacity:0.4}).addTo(map)}
-}
-document.getElementById('radius-input').addEventListener('input',updC);
+  if (monitoring && inside > 0 && !insideTimer) {
+    insideTimer = setInterval(() => play('square', 888, 0.3, 1.5), 5000);
+    play('square', 888, 0.3, 1.5);
+  } else if ((!monitoring || inside === 0) && insideTimer) {
+    clearInterval(insideTimer);
+    insideTimer = null;
+  }
 
-function toggle(){
-  monitoring?stopWarn():startWarn();
-}
-document.getElementById('toggle-btn').addEventListener('click',toggle);
-
-var acx=null;
-function acx_(){if(!acx)acx=new(window.AudioContext||window.webkitAudioContext)();if(acx.state==='suspended')acx.resume();return acx}
-
-function play(oscType,freq,gain,dur){
-  try{
-    var ctx=acx_();
-    var oc=ctx.createOscillator(),gn=ctx.createGain();
-    oc.connect(gn);gn.connect(ctx.destination);
-    oc.type=oscType;oc.frequency.value=freq;
-    var st=ctx.currentTime;
-    gn.gain.setValueAtTime(gain,st);gn.gain.exponentialRampToValueAtTime(0.001,st+dur);
-    oc.start(st);oc.stop(st+dur);
-  }catch(e){console.error('[AG] play:',e)}
-}
-
-function startWarn(){
-  if(!pilotLat||!map)return;
-  acx_();monitoring=true;
-  var tb=document.getElementById('toggle-btn');
-  tb.innerHTML='<span class="ico">&#9632;</span>';tb.classList.add('active');
-  stopApproach();
-  if(insideTimer){clearInterval(insideTimer);insideTimer=null}
-}
-
-function stopWarn(){
-  monitoring=false;
-  var tb=document.getElementById('toggle-btn');
-  tb.innerHTML='<span class="ico ico-play">&#9654;</span>';tb.classList.remove('active');
-  if(insideTimer){clearInterval(insideTimer);insideTimer=null}
-  stopApproach();
-}
-
-function stopApproach(){if(approachTimer){clearInterval(approachTimer);approachTimer=null}}
-
-function renderTick(){
-  var now=Date.now();
-  for(var id in markers){
-    var d=acData[id];if(!d||d.s==null||d.h==null||d.s<=0)continue;
-    if(d.n){
-      d.l+=(d.n.l-d.l)*0.25;d.g+=(d.n.g-d.g)*0.25;
-      if(d.n.h!=null)d.h+=(d.n.h-d.h)*0.25;
-      if(d.n.s!=null)d.s+=(d.n.s-d.s)*0.25;
-      d.t=now;
-      if(Math.abs(d.n.l-d.l)+Math.abs(d.n.g-d.g)<0.00001){
-        d.l=d.n.l;d.g=d.n.g;
-        if(d.n.h!=null)d.h=d.n.h;
-        if(d.n.s!=null)d.s=d.n.s;
-        delete d.n;
+  let hasCloseApproach = false;
+  for (const a of approachingAircraft) {
+    if (a.gs > 0) {
+      const rk = Math.max(parseFloat(document.getElementById('radius-input').value) || 3, 0.1);
+      const d = dist(a.lat, a.lon, pilotLat, pilotLon);
+      if ((d - rk) / (a.gs * KNOTS_TO_KMPH / 60) < 5) {
+        hasCloseApproach = true;
+        break;
       }
     }
-    var e=(now-d.t)/3600000;if(e<=0||e>0.1)continue;
-    var dk=d.s*1.852*e,hd=d.h*Math.PI/180;
-    markers[id].setLatLng([d.l+dk*Math.cos(hd)/111.32,d.g+dk*Math.sin(hd)/(111.32*Math.cos(d.l*Math.PI/180))]);
   }
-  renderTimer=setTimeout(renderTick,100);
-}
-
-async function fetchAc(){
-  if(!pilotLat||!pilotLon)return;
-  try{
-    var r=await fetch('https://api.airplanes.live/v2/point/'+pilotLat+'/'+pilotLon+'/54',{mode:'cors'});
-    if(!r.ok)return;
-    var t=await r.text();if(t.length<30)return;
-    proc(JSON.parse(t).ac||[]);
-  }catch(e){console.error('[AG] fetch:',e)}
-}
-
-function cross(lat,lon,hdg,spd,rk){
-  var R=rk*1000,cl=Math.cos(pilotLat*Math.PI/180);
-  var ax=(lon-pilotLon)*111320*cl,ay=(lat-pilotLat)*110540;
-  var h=hdg*Math.PI/180,dx=Math.sin(h),dy=Math.cos(h);
-  var t=(-ax)*dx+(-ay)*dy;if(t<0)return false;
-  var d=Math.sqrt((ax+t*dx)*(ax+t*dx)+(ay+t*dy)*(ay+t*dy));
-  return d<=R;
-}
-
-function eta(lat,lon,hdg,spd,rk){
-  if(hdg==null||spd==null||spd<=0)return null;
-  var R=rk*1000,cl=Math.cos(pilotLat*Math.PI/180);
-  var ax=(lon-pilotLon)*111320*cl,ay=(lat-pilotLat)*110540;
-  var h=hdg*Math.PI/180,dx=Math.sin(h),dy=Math.cos(h);
-  var b=2*(ax*dx+ay*dy),c=ax*ax+ay*ay-R*R;
-  var d=b*b-4*c;if(d<0)return null;
-  var s=Math.sqrt(d),t1=(-b-s)/2,t2=(-b+s)/2;
-  var te=t1>0?(t1<t2?t1:t2):t2>0?t2:null;
-  if(te==null||te<=0)return null;
-  return te/(spd*0.514444)/60;
-}
-
-function ete(lat,lon,hdg,spd,rk){
-  if(hdg==null||spd==null||spd<=0)return null;
-  var R=rk*1000,cl=Math.cos(pilotLat*Math.PI/180);
-  var ax=(lon-pilotLon)*111320*cl,ay=(lat-pilotLat)*110540;
-  var h=hdg*Math.PI/180,dx=Math.sin(h),dy=Math.cos(h);
-  var b=2*(ax*dx+ay*dy),c=ax*ax+ay*ay-R*R;
-  var d=b*b-4*c;if(d<0)return null;
-  var te=Math.max((-b+Math.sqrt(d))/2,(-b-Math.sqrt(d))/2);
-  if(te<=0)return null;
-  return te/(spd*0.514444)/60;
-}
-
-function zs(a){
-  var rk=Math.max(parseFloat(document.getElementById('radius-input').value)||3,0.1);
-  var d=dist(a.lat,a.lon,pilotLat,pilotLon);
-  if(d<=rk)return{s:'inside',eta:null,ete:a.track!=null&&a.gs!=null&&a.gs>0?ete(a.lat,a.lon,a.track,a.gs,rk):null};
-  if(a.track==null||a.gs==null||a.gs<=0)return{s:'passing',eta:null,ete:null};
-  if(cross(a.lat,a.lon,a.track,a.gs,rk))return{s:'approaching',eta:eta(a.lat,a.lon,a.track,a.gs,rk),ete:null};
-  return{s:'passing',eta:null,ete:null};
-}
-
-function proc(ac){
-  var ids={},ns={},now=Date.now();
-  var inside=0,approaching=0,passing=0;
-  for(var i=0;i<ac.length;i++){
-    var a=ac[i],id=a.hex,lat=a.lat,lon=a.lon;
-    if(!id||lat==null||lon==null||isNaN(lat)||isNaN(lon))continue;
-    ids[id]=true;
-    if(acData[id]){acData[id].n={l:lat,g:lon,h:a.track,s:a.gs!=null?a.gs:a.tas}}
-    else{acData[id]={l:lat,g:lon,h:a.track,s:a.gs!=null?a.gs:a.tas,t:now}}
-    var sr=zs(a);ns[id]=sr.s;
-    if(sr.s==='inside')inside++;else if(sr.s==='approaching')approaching++;else passing++;
-    var col=sr.s==='inside'?'#ff4444':sr.s==='approaching'?'#ffcc00':'#44ff44';
-    var pp=pop(a,sr);
-    if(markers[id]){markers[id].setIcon(icn(a.track,col,a.category));markers[id].setPopupContent(pp)}
-    else{var m=L.marker([lat,lon],{icon:icn(a.track,col,a.category)}).addTo(map);m.bindPopup(pp);markers[id]=m}
-    if(monitoring&&sr.s==='inside'&&prev[id]!=='inside'){play('square',888,0.3,2);var el=document.getElementById('flash');el.style.transition='none';el.style.opacity='0.15';void el.offsetWidth;el.style.transition='opacity 0.5s ease-out';el.style.opacity='0'}
+  if (monitoring && hasCloseApproach && !approachTimer) {
+    const alarm = () => {
+      play('sine', 440, 0.2, 0.15);
+      setTimeout(() => play('sine', 440, 0.2, 0.15), 600);
+      setTimeout(() => play('sine', 440, 0.2, 0.15), 1200);
+    };
+    alarm();
+    approachTimer = setInterval(alarm, 30000);
+  } else if ((!monitoring || !hasCloseApproach) && approachTimer) {
+    clearInterval(approachTimer);
+    approachTimer = null;
   }
-  for(var id in markers){if(!ids[id]){map.removeLayer(markers[id]);delete markers[id];delete acData[id];delete disp[id]}}
-  for(var id in prev)if(!ids[id])delete prev[id];
-  if(monitoring&&inside>0&&!insideTimer){insideTimer=setInterval(function(){play('square',888,0.3,1.5)},5000);play('square',888,0.3,1.5)}
-  else if((!monitoring||inside===0)&&insideTimer){clearInterval(insideTimer);insideTimer=null}
-  var has=false;
-  for(var i=0;i<ac.length;i++){
-    var a=ac[i],id=a.hex;if(!id||ns[id]!=='approaching')continue;
-    if(a.gs>0){var rk=Math.max(parseFloat(document.getElementById('radius-input').value)||3,0.1);var d=dist(a.lat,a.lon,pilotLat,pilotLon);if((d-rk)/(a.gs*0.0308667)<5){has=true;break}}
-  }
-  if(monitoring&&has&&!approachTimer){
-    var at=function(){play('sine',440,0.2,0.15);setTimeout(function(){play('sine',440,0.2,0.15)},600);setTimeout(function(){play('sine',440,0.2,0.15)},1200)};
-    at();approachTimer=setInterval(at,30000);
-  }else if((!monitoring||!has)&&approachTimer){clearInterval(approachTimer);approachTimer=null}
-  for(var id in ns)prev[id]=ns[id];
-  updateBar(inside,approaching,passing);
+
+  for (const id in statusMap) prev[id] = statusMap[id];
+  updateStatusBar(inside, approaching, passing);
 }
 
-function pop(a,sr){
-  var af=a.alt_geom!=null?a.alt_geom:a.alt_baro,am=af!=null?(af*0.3048).toFixed(0):'—',sk=a.gs!=null?a.gs:a.tas,skh=sk!=null?(sk*1.852).toFixed(0):'—';
-  var d=dist(a.lat,a.lon,pilotLat,pilotLon);
-  var ct=CATEGORY[(''+a.category).toUpperCase()];if(!ct)ct=a.category!=null?a.category:'—';
-  var cs=((a.flight||'')+'').trim()||'?';
-  var sl=sr.s==='inside'?'Inside Zone':sr.s==='approaching'?'Approaching':'Passing',ex='';
-  if(sr.s==='approaching'&&sr.eta!=null)ex+='<div class="popup-row"><span class="popup-label">ETA</span><span class="popup-value">'+fmt(sr.eta)+'</span></div>';
-  if(sr.s==='inside'&&sr.ete!=null)ex+='<div class="popup-row"><span class="popup-label">ETE</span><span class="popup-value">'+fmt(sr.ete)+'</span></div>';
-  return'<div class="popup-content"><div class="popup-row"><span class="popup-label">Flight</span><span class="popup-value">'+cs+'</span></div><div class="popup-row"><span class="popup-label">Type</span><span class="popup-value">'+ct+'</span></div><div class="popup-row"><span class="popup-label">Alt</span><span class="popup-value">'+am+' m</span></div><div class="popup-row"><span class="popup-label">Speed</span><span class="popup-value">'+skh+' km/h</span></div><div class="popup-row"><span class="popup-label">Dist</span><span class="popup-value">'+d.toFixed(1)+' km</span></div>'+ex+'<div class="popup-status status-'+sr.s+'">'+sl+'</div></div>';
+// ============================================
+// UI Setup
+// ============================================
+
+function initUI() {
+  document.getElementById('lock-btn').addEventListener('click', toggleLock);
+  document.getElementById('lock-btn-c').addEventListener('click', toggleLock);
+
+  document.getElementById('show-coord').addEventListener('click', () => {
+    document.getElementById('search-mode').style.display = 'none';
+    document.getElementById('coord-mode').classList.add('show');
+    if (homeLat != null && homeLon != null && map) {
+      setPilotPosition(homeLat, homeLon, 'GPS position');
+    } else if (pilotLat != null && pilotLon != null && map) {
+      map.setView([pilotLat, pilotLon], 12);
+    }
+  });
+  document.getElementById('show-search').addEventListener('click', () => {
+    document.getElementById('search-mode').style.display = 'flex';
+    document.getElementById('coord-mode').classList.remove('show');
+  });
+
+  document.getElementById('search-input').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (locked) {
+      const hint = document.getElementById('lock-hint');
+      hint.classList.add('show');
+      setTimeout(() => hint.classList.remove('show'), 2500);
+      return;
+    }
+    const q = e.target.value.trim();
+    if (!q) return;
+    gpsStatusEl.textContent = 'Searching...';
+    gpsStatusEl.className = '';
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', 'https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(q) + '&limit=1', true);
+    xhr.timeout = 10000;
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (data && data.length > 0) {
+          const lat = parseFloat(data[0].lat);
+          const lng = parseFloat(data[0].lon);
+          setPilotPosition(lat, lng, 'Search: ' + (data[0].display_name || q).substring(0, 50));
+        } else {
+          gpsStatusEl.textContent = 'Not found.';
+          gpsStatusEl.className = 'fail';
+        }
+      } catch (e) {
+        gpsStatusEl.textContent = 'Search failed.';
+        gpsStatusEl.className = 'fail';
+      }
+    };
+    xhr.onerror = () => { gpsStatusEl.textContent = 'Network error.'; gpsStatusEl.className = 'fail'; };
+    xhr.send();
+  });
+
+  document.getElementById('lat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') setFromCoords(); });
+  document.getElementById('lng-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') setFromCoords(); });
+
+  document.getElementById('radius-input').addEventListener('input', updateZoneCircle);
+
+  gpsStatusEl.addEventListener('click', () => {
+    if (pilotLat != null && pilotLon != null && map) {
+      map.setView([pilotLat, pilotLon], 12);
+    }
+  });
+
+  document.getElementById('controls').addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+
+  document.getElementById('toggle-btn').addEventListener('click', toggleMonitoring);
+
+  document.getElementById('theme-btn').addEventListener('click', toggleTheme);
 }
 
-function fmt(m){
-  if(m==null||m<0)return'N/A';
-  var min=Math.floor(m),sec=Math.round((m-min)*60);
-  if(sec>=60){min+=1;sec=0}
-  return min+':'+(sec<10?'0':'')+sec;
-}
+// ============================================
+// Boot
+// ============================================
 
-function dist(lat1,lon1,lat2,lon2){
-  var R=6371,dlat=(lat2-lat1)*Math.PI/180,dlon=(lon2-lon1)*Math.PI/180;
-  var a=Math.sin(dlat/2)*Math.sin(dlat/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dlon/2)*Math.sin(dlon/2);
-  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+if (typeof L !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    applyTheme();
+    initMap();
+    initUI();
+    initGPS();
+  });
+} else {
+  document.getElementById('loading').textContent = 'Error: Leaflet failed to load.';
 }
-
-function updateBar(inside,approaching,passing){
-  document.getElementById('count-inside').textContent=inside||0;
-  document.getElementById('count-approaching').textContent=approaching||0;
-  document.getElementById('count-passing').textContent=passing||0;
-}
-
-if(typeof L!=='undefined')document.addEventListener('DOMContentLoaded',function(){applyTheme();initMap();initLocation()});
-else document.getElementById('loading').textContent='Error: Leaflet failed to load.';
 </script>
 </body>
 </html>
